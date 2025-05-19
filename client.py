@@ -1,3 +1,4 @@
+#TESTER CLIENT
 import socket
 
 HEADER = 32
