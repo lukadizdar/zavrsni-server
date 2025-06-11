@@ -164,6 +164,7 @@ main {
 
 #temperature-reading-box {
     background: linear-gradient(135deg, #b31f1f, #3a0000);
+    border: 1px solid #502002; /* Subtle border */
     /* Or any other color you like! */
 }
 
