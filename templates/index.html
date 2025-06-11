@@ -51,7 +51,8 @@
                 <h2>Live Sensor Data</h2>
                 <div class="live-readings-grid">
                     <!-- Temperature Reading Container -->
-                    <div class="reading-container" id="temperature-reading-box">
+                    {# Added onclick event to toggle temperature unit #}
+                    <div class="reading-container" id="temperature-reading-box" onclick="toggleTemperatureUnit()">
                         <p>Temperature Reading:</p>
                         <span class="emoji">🌡️</span> <!-- Thermometer emoji -->
                         <p class="value temp-value" id="temperature-value">
@@ -130,15 +131,43 @@
 
     <script>
         let liveReadingsInterval; // Variable to hold the live readings interval ID
-        let statsInterval;        // Re-introduced variable for statistics interval ID
+        let statsInterval;        // Variable for statistics interval ID
         let tempChartInstance;    // Variable to hold the temperature chart instance
         let humChartInstance;     // Variable to hold the humidity chart instance
+
+        // NEW GLOBAL VARIABLES for temperature unit toggle
+        let currentTemperatureCelsius = null; // Stores the raw Celsius value
+        let isCelsius = true;                 // Tracks the current display unit (true for Celsius, false for Fahrenheit)
+
 
         // Helper function to convert kebab-case (e.g., 'live-readings') to PascalCase (e.g., 'LiveReadings')
         function kebabToPascalCase(kebabString) {
             return kebabString.split('-')
                 .map(word => word.charAt(0).toUpperCase() + word.slice(1))
                 .join('');
+        }
+
+        // NEW FUNCTION: Convert Celsius to Fahrenheit
+        function celsiusToFahrenheit(celsius) {
+            return (celsius * 9/5) + 32;
+        }
+
+        // NEW FUNCTION: Toggle temperature unit on click
+        function toggleTemperatureUnit() {
+            const tempElement = document.getElementById('temperature-value');
+            if (currentTemperatureCelsius === null) {
+                // No temperature data yet, cannot toggle
+                return;
+            }
+
+            if (isCelsius) {
+                const fahrenheit = celsiusToFahrenheit(currentTemperatureCelsius);
+                tempElement.textContent = `${fahrenheit.toFixed(2)} °F`;
+                isCelsius = false;
+            } else {
+                tempElement.textContent = `${currentTemperatureCelsius.toFixed(2)} °C`;
+                isCelsius = true;
+            }
         }
 
         // Function to fetch live readings from the Flask API
@@ -151,21 +180,31 @@
                 const humidityElement = document.getElementById('humidity-value');
 
                 if (response.ok && data.temperature !== undefined && data.humidity !== undefined) {
-                    tempElement.textContent = `${data.temperature.toFixed(2)} °C`;
+                    currentTemperatureCelsius = data.temperature; // Store the raw Celsius value
+
+                    if (isCelsius) {
+                        tempElement.textContent = `${currentTemperatureCelsius.toFixed(2)} °C`;
+                    } else {
+                        const fahrenheit = celsiusToFahrenheit(currentTemperatureCelsius);
+                        tempElement.textContent = `${fahrenheit.toFixed(2)} °F`;
+                    }
                     humidityElement.textContent = `${data.humidity.toFixed(2)} %`;
                 } else if (data.message) {
-                    tempElement.textContent = `N/A °C`;
+                    tempElement.textContent = `N/A °C`; // Default to Celsius if no data
                     humidityElement.textContent = `N/A %`;
+                    currentTemperatureCelsius = null; // Reset if no data
                     console.log(data.message);
                 } else {
-                    tempElement.textContent = `Error °C`;
+                    tempElement.textContent = `Error °C`; // Default to Celsius if error
                     humidityElement.textContent = `Error %`;
+                    currentTemperatureCelsius = null; // Reset if error
                     console.error('Error fetching live readings:', data.error || 'Unknown error');
                 }
             } catch (error) {
                 console.error('Network or parsing error fetching live readings:', error);
                 document.getElementById('temperature-value').textContent = `Err °C`;
                 document.getElementById('humidity-value').textContent = `Err %`;
+                currentTemperatureCelsius = null; // Reset on network error
             }
         }
 
@@ -187,7 +226,7 @@
                 data: {
                     labels: timestamps,
                     datasets: [{
-                        label: 'Temperature (°C)',
+                        label: 'Temperature (°C)', // Charts will always display Celsius
                         data: temperatures,
                         borderColor: 'rgb(255, 99, 132)',
                         backgroundColor: 'rgba(255, 99, 132, 0.2)',
@@ -418,7 +457,7 @@
                     liveReadingsInterval = setInterval(fetchLiveReadings, 500); // Poll every 0.5 seconds
                 } else if (sectionId === 'statistics') {
                     fetchStatistics(); // Fetch immediately on section display
-                    statsInterval = setInterval(fetchStatistics, 60000); // Re-added: Poll every 65 seconds
+                    statsInterval = setInterval(fetchStatistics, 45000); // Re-added: Poll every 45 seconds
                 }
             }
 
@@ -446,6 +485,12 @@
                 renderCharts(timestamps, temperatures, humidities);
             }
             // The table is already rendered by Jinja2 directly using initial_stats_data_for_table (newest first).
+
+            // Initial temperature value setup
+            const initialTemp = {{ initial_temperature | tojson }};
+            if (initialTemp !== null) {
+                currentTemperatureCelsius = parseFloat(initialTemp); // Ensure it's a number
+            }
         });
     </script>
 
