@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Temperature & Humidity App</title>
+    <!-- Link to your external CSS file using Flask's url_for for static files -->
+    <link rel="stylesheet", href="../static/style.css">
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+
+    <!-- Main Container -->
+    <div class="container">
+
+        <!-- Header Section -->
+        <header>
+            <h1>Temperature & Humidity Application</h1>
+        </header>
+
+        <!-- Navigation Buttons -->
+        <nav>
+            <div class="nav-buttons">
+                <button id="btnHome" class="nav-button active" onclick="showSection('home')">Home</button>
+                <button id="btnLiveReadings" class="nav-button" onclick="showSection('live-readings')">Live Readings</button>
+                <button id="btnStatistics" class="nav-button" onclick="showSection('statistics')">Graphs</button>
+            </div>
+        </nav>
+
+        <!-- Content Sections -->
+        <main>
+
+            <!-- Home Section -->
+            <section id="home-section" class="content-section active">
+                <h2>Welcome!</h2>
+                <p>
+                    View live sensor data or past data.
+                </p>
+                
+                <!-- Display Server IP and Port -->
+                <div class="ip-info">
+                    <p>Connect your ESP32 to:</p>
+                    <p>TCP/IP Server Address: <strong>{{ local_server_ip }}:{{ socket_server_port }}</strong></p>
+                    <p>Make sure both `server.py` and `app.py` are running.</p>
+                </div>
+            </section>
+
+            <!-- Live Readings Section -->
+            <section id="live-readings-section" class="content-section">
+                <h2>Live Sensor Data</h2>
+                <div class="live-readings-grid">
+                    <!-- Temperature Reading Container -->
+                    <div class="reading-container" id="temperature-reading-box">
+                        <p>Temperature Reading:</p>
+                        <span class="emoji">🌡️</span> <!-- Thermometer emoji -->
+                        <p class="value temp-value" id="temperature-value">
+                            <!-- Jinja2 for initial value, changed to "%.2f" for two decimal places -->
+                            {% if initial_temperature is not none %}
+                                {{ "%.2f" | format(initial_temperature) }} °C
+                            {% else %}
+                                --.-- °C
+                            {% endif %}
+                        </p>
+                    </div>
+
+                    <!-- Humidity Reading Container -->
+                    <div class="reading-container">
+                        <p>Humidity Reading:</p>
+                        <span class="emoji">💦</span> <!-- Water droplet emoji -->
+                        <p class="value humidity-value" id="humidity-value">
+                            <!-- Jinja2 for initial value, changed to "%.2f" for two decimal places -->
+                            {% if initial_humidity is not none %}
+                                {{ "%.2f" | format(initial_humidity) }} %
+                            {% else %}
+                                --.-- %
+                            {% endif %}
+                        </p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Statistics Section -->
+            <section id="statistics-section" class="content-section">
+                <h2>Past Statistics</h2>
+                <p id="statistics-message" class="no-data-message">
+                    Loading past data...
+                </p>
+
+                <!-- Chart Containers -->
+                <div class="chart-container">
+                    <canvas id="temperatureChart"></canvas>
+                </div>
+                <div class="chart-container">
+                    <canvas id="humidityChart"></canvas>
+                </div>
+
+                <!-- Table Container -->
+                <div id="statistics-table-container">
+                    <!-- Jinja2 will render initial data here -->
+                    {% if initial_stats_data_for_table %} 
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>Temperature</th>
+                                <th>Humidity</th>
+                                <th>Client IP</th>
+                            </tr>
+                        </thead>
+                        <tbody id="statistics-table-body">
+                            {% for reading in initial_stats_data_for_table %} 
+                            <tr>
+                                <td>{{ reading.timestamp_formatted }}</td>
+                                <td>{{ "%.2f" | format(reading.temperature) }} °C</td>
+                                <td>{{ "%.2f" | format(reading.humidity) }} %</td>
+                                <td>{{ reading.client_ip }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    {% else %}
+                        <p id="statistics-table-placeholder" class="no-data-message">No historical data available yet.</p>
+                    {% endif %}
+                </div>
+            </section>
+
+        </main>
+    </div>
+
+    <script>
+        let liveReadingsInterval; // Variable to hold the live readings interval ID
+        let statsInterval;        // Re-introduced variable for statistics interval ID
+        let tempChartInstance;    // Variable to hold the temperature chart instance
+        let humChartInstance;     // Variable to hold the humidity chart instance
+
+        // Helper function to convert kebab-case (e.g., 'live-readings') to PascalCase (e.g., 'LiveReadings')
+        function kebabToPascalCase(kebabString) {
+            return kebabString.split('-')
+                .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+                .join('');
+        }
+
+        // Function to fetch live readings from the Flask API
+        async function fetchLiveReadings() {
+            try {
+                const response = await fetch('/api/live_readings');
+                const data = await response.json();
+
+                const tempElement = document.getElementById('temperature-value');
+                const humidityElement = document.getElementById('humidity-value');
+
+                if (response.ok && data.temperature !== undefined && data.humidity !== undefined) {
+                    tempElement.textContent = `${data.temperature.toFixed(2)} °C`;
+                    humidityElement.textContent = `${data.humidity.toFixed(2)} %`;
+                } else if (data.message) {
+                    tempElement.textContent = `N/A °C`;
+                    humidityElement.textContent = `N/A %`;
+                    console.log(data.message);
+                } else {
+                    tempElement.textContent = `Error °C`;
+                    humidityElement.textContent = `Error %`;
+                    console.error('Error fetching live readings:', data.error || 'Unknown error');
+                }
+            } catch (error) {
+                console.error('Network or parsing error fetching live readings:', error);
+                document.getElementById('temperature-value').textContent = `Err °C`;
+                document.getElementById('humidity-value').textContent = `Err %`;
+            }
+        }
+
+        // Function to render charts using Chart.js
+        function renderCharts(timestamps, temperatures, humidities) {
+            const tempCtx = document.getElementById('temperatureChart').getContext('2d');
+            const humCtx = document.getElementById('humidityChart').getContext('2d');
+
+            // Destroy existing chart instances if they exist
+            if (tempChartInstance) {
+                tempChartInstance.destroy();
+            }
+            if (humChartInstance) {
+                humChartInstance.destroy();
+            }
+
+            tempChartInstance = new Chart(tempCtx, {
+                type: 'line',
+                data: {
+                    labels: timestamps,
+                    datasets: [{
+                        label: 'Temperature (°C)',
+                        data: temperatures,
+                        borderColor: 'rgb(255, 99, 132)',
+                        backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                        tension: 0.3,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Time',
+                                color: '#e0e0e0'
+                            },
+                            ticks: {
+                                color: '#b0b0b0'
+                            },
+                            grid: {
+                                color: 'rgba(255, 255, 255, 0.1)'
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Temperature (°C)',
+                                color: '#e0e0e0'
+                            },
+                            ticks: {
+                                color: '#b0b0b0'
+                            },
+                            grid: {
+                                color: 'rgba(255, 255, 255, 0.1)'
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            labels: {
+                                color: '#e0e0e0'
+                            }
+                        },
+                        title: {
+                            display: true,
+                            text: 'Temperature Over Time',
+                            color: '#ffffff'
+                        }
+                    }
+                }
+            });
+
+            humChartInstance = new Chart(humCtx, {
+                type: 'line',
+                data: {
+                    labels: timestamps,
+                    datasets: [{
+                        label: 'Humidity (%)',
+                        data: humidities,
+                        borderColor: 'rgb(54, 162, 235)',
+                        backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                        tension: 0.3,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Time',
+                                color: '#e0e0e0'
+                            },
+                            ticks: {
+                                color: '#b0b0b0'
+                            },
+                            grid: {
+                                color: 'rgba(255, 255, 255, 0.1)'
+                            }
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Humidity (%)',
+                                color: '#e0e0e0'
+                            },
+                            ticks: {
+                                color: '#b0b0b0'
+                            },
+                            grid: {
+                                color: 'rgba(255, 255, 255, 0.1)'
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            labels: {
+                                color: '#e0e0e0'
+                            }
+                        },
+                        title: {
+                            display: true,
+                            text: 'Humidity Over Time',
+                            color: '#ffffff'
+                        }
+                    }
+                }
+            });
+        }
+
+
+        // Function to fetch statistics from the Flask API and update the table AND charts
+        async function fetchStatistics() {
+            try {
+                const response = await fetch('/api/statistics');
+                const data = await response.json();
+
+                const statsMessageElement = document.getElementById('statistics-message');
+                let tableBody = document.getElementById('statistics-table-body');
+                const tablePlaceholder = document.getElementById('statistics-table-placeholder');
+                const tableContainer = document.getElementById('statistics-table-container');
+
+                // Ensure the table structure exists before clearing/populating
+                if (!tableBody && tableContainer) {
+                    if (tablePlaceholder) tablePlaceholder.remove();
+                    const newTable = document.createElement('table');
+                    newTable.innerHTML = `
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>Temperature</th>
+                                <th>Humidity</th>
+                                <th>Client IP</th>
+                            </tr>
+                        </thead>
+                        <tbody id="statistics-table-body"></tbody>
+                    `;
+                    tableContainer.appendChild(newTable);
+                    tableBody = document.getElementById('statistics-table-body'); // Re-get the new tbody
+                } else if (tableBody) {
+                    tableBody.innerHTML = ''; // Clear existing rows if table exists
+                }
+
+                if (response.ok && data.data && data.data.length > 0) {
+                    statsMessageElement.textContent = `Displaying last ${data.count} readings.`;
+                    
+                    // --- For Charts: Data should be oldest first (ascending timestamp) ---
+                    // The API returns data OLDEST FIRST (from app.py aggregation), so use it directly.
+                    const timestamps = data.data.map(reading => reading.timestamp_formatted);
+                    const temperatures = data.data.map(reading => reading.temperature);
+                    const humidities = data.data.map(reading => reading.humidity);
+
+                    renderCharts(timestamps, temperatures, humidities);
+
+                    // --- For Table: Display newest first (descending timestamp) ---
+                    // The API returns data OLDEST FIRST, so we reverse it for the table.
+                    const reversedDataForTable = data.data.slice().reverse(); // Create a shallow copy and reverse
+                    
+                    reversedDataForTable.forEach(reading => {
+                        const row = tableBody.insertRow();
+                        row.insertCell().textContent = reading.timestamp_formatted || 'N/A';
+                        row.insertCell().textContent = `${reading.temperature !== undefined ? reading.temperature.toFixed(2) : 'N/A'} °C`;
+                        row.insertCell().textContent = `${reading.humidity !== undefined ? reading.humidity.toFixed(2) : 'N/A'} %`;
+                        row.insertCell().textContent = reading.client_ip || 'N/A';
+                    });
+                    
+                    if (tableBody && tableBody.parentElement) tableBody.parentElement.style.display = 'table';
+                    if (tablePlaceholder) tablePlaceholder.style.display = 'none';
+
+                } else { // No data or error
+                    statsMessageElement.textContent = data.message || `No historical data available yet.`;
+                    console.error('Error fetching statistics:', data.error || 'Unknown error', data.message);
+                    if (tableBody) tableBody.innerHTML = '';
+                    if (tableBody && tableBody.parentElement) tableBody.parentElement.style.display = 'none';
+                    if (tablePlaceholder) tablePlaceholder.style.display = 'block';
+
+                    if (tempChartInstance) tempChartInstance.destroy();
+                    if (humChartInstance) humChartInstance.destroy();
+                }
+            } catch (error) {
+                console.error('Network or parsing error fetching statistics:', error);
+                document.getElementById('statistics-message').textContent = `Failed to load statistics.`;
+                let tableBody = document.getElementById('statistics-table-body');
+                const tablePlaceholder = document.getElementById('statistics-table-placeholder');
+                if (tableBody) tableBody.innerHTML = '';
+                if (tableBody && tableBody.parentElement) tableBody.parentElement.style.display = 'none';
+                if (tablePlaceholder) tablePlaceholder.style.display = 'block';
+
+                if (tempChartInstance) tempChartInstance.destroy();
+                if (humChartInstance) humChartInstance.destroy();
+            }
+        }
+
+
+        // JavaScript for tab switching functionality
+        function showSection(sectionId) {
+            const sections = document.querySelectorAll('.content-section');
+            const navButtons = document.querySelectorAll('.nav-button');
+
+            sections.forEach(section => {
+                section.style.display = 'none';
+            });
+            navButtons.forEach(button => {
+                button.classList.remove('active');
+            });
+
+            // Stop any existing live readings interval
+            if (liveReadingsInterval) {
+                clearInterval(liveReadingsInterval);
+                liveReadingsInterval = null;
+            }
+            // IMPORTANT: Clear the statistics interval here too
+            if (statsInterval) { // Check if statsInterval exists before clearing
+                clearInterval(statsInterval);
+                statsInterval = null;
+            }
+
+
+            const targetSection = document.getElementById(`${sectionId}-section`);
+            if (targetSection) {
+                targetSection.style.display = 'block';
+
+                if (sectionId === 'live-readings') {
+                    fetchLiveReadings();
+                    liveReadingsInterval = setInterval(fetchLiveReadings, 500); // Poll every 0.5 seconds
+                } else if (sectionId === 'statistics') {
+                    fetchStatistics(); // Fetch immediately on section display
+                    statsInterval = setInterval(fetchStatistics, 60000); // Re-added: Poll every 65 seconds
+                }
+            }
+
+            const buttonIdToActivate = `btn${kebabToPascalCase(sectionId)}`;
+            const clickedButton = document.getElementById(buttonIdToActivate);
+
+            if (clickedButton) {
+                clickedButton.classList.add('active');
+            }
+        }
+
+        // Initialize by showing the 'home' section on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            showSection('home'); // Show home first
+
+            // Initial render of charts/table if initial_chart_data is available
+            // Note: initial_chart_data passed from Flask is OLDEST FIRST.
+            const initialChartDataFromFlask = {{ initial_chart_data | tojson }};
+
+            if (initialChartDataFromFlask && initialChartDataFromFlask.length > 0) {
+                // For initial charts, use the data directly (it's already oldest first)
+                const timestamps = initialChartDataFromFlask.map(reading => reading.timestamp_formatted);
+                const temperatures = initialChartDataFromFlask.map(reading => reading.temperature);
+                const humidities = initialChartDataFromFlask.map(reading => reading.humidity);
+                renderCharts(timestamps, temperatures, humidities);
+            }
+            // The table is already rendered by Jinja2 directly using initial_stats_data_for_table (newest first).
+        });
+    </script>
+
+</body>
+</html>
