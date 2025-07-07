@@ -1,5 +1,3 @@
-# app.py
-
 from flask import Flask, render_template, jsonify
 from pymongo import MongoClient, database, collection
 from datetime import datetime, timedelta
@@ -9,7 +7,7 @@ from typing import Optional, List, Dict, Any, Sequence, Mapping
 
 app = Flask(__name__)
 
-# --- IP Discovery Function ---
+#ip search
 def get_local_ip() -> str:
     s: Optional[socket.socket] = None
     ip_address = '127.0.0.1'
@@ -24,15 +22,14 @@ def get_local_ip() -> str:
             s.close()
     return ip_address
 
-# --- MongoDB Configuration ---
+# mongodb same as server.py
 MONGO_URI = os.getenv('MONGO_URI', 'mongodb://localhost:27017/')
 DATABASE_NAME = os.getenv('DATABASE_NAME', 'sensor_data')
 COLLECTION_NAME = os.getenv('COLLECTION_NAME', 'readings')
 
-# Sampling parameters for statistics view
-HISTORY_LENGTH_MINUTES = 60 # We want 60 minutes of history
+HISTORY_LENGTH_MINUTES = 60 #60 samples in graph
 
-# Initialize MongoDB client
+#mongodb init
 client: Optional[MongoClient] = None
 db: Optional[database.Database] = None
 readings_collection: Optional[collection.Collection] = None
@@ -49,32 +46,20 @@ except Exception as e:
     db = None
     readings_collection = None
 
-# --- Helper function for MongoDB Aggregation Pipeline ---
 def get_aggregated_readings_from_db(limit: int = HISTORY_LENGTH_MINUTES) -> List[Dict[str, Any]]:
-    """
-    Fetches and aggregates sensor readings into 1-minute samples using MongoDB's aggregation pipeline.
-    Returns data sorted OLDEST FIRST (ascending timestamp), suitable for charts,
-    and representing the latest 'limit' minutes.
-    """
     if readings_collection is None:
         return []
 
     try:
-        # Calculate time threshold to fetch enough raw data to guarantee 'limit'
-        # distinct minutes of aggregated data. Fetching slightly more than 'limit'
-        # in case of sparse data or edge cases.
-        time_threshold = datetime.now() - timedelta(minutes=limit + 10) # Extended buffer to 70 mins
+        time_threshold = datetime.now() - timedelta(minutes=limit + 10)
 
         pipeline: Sequence[Mapping[str, Any]] = [
             {
-                # 1. Match documents from the last X minutes (e.g., 70 minutes)
                 '$match': {
                     'timestamp': { '$gte': time_threshold }
                 }
             },
             {
-                # 2. Group by minute to get one sample per minute.
-                # Use $last to get the reading closest to the end of the minute.
                 '$group': {
                     '_id': {
                         'year': { '$year': '$timestamp' },
@@ -85,29 +70,24 @@ def get_aggregated_readings_from_db(limit: int = HISTORY_LENGTH_MINUTES) -> List
                     },
                     'temperature': { '$last': '$temperature' },
                     'humidity': { '$last': '$humidity' },
-                    'timestamp_raw': { '$last': '$timestamp' }, # Keep raw timestamp for sorting
+                    'timestamp_raw': { '$last': '$timestamp' },
                     'client_ip': { '$last': '$client_ip' }
                 }
             },
             {
-                # 3. Sort by the raw timestamp in DESCENDING order to put NEWEST minutes at the top.
                 '$sort': {
                     'timestamp_raw': -1
                 }
             },
             {
-                # 4. Limit to the desired number of most recent aggregated samples (e.g., 60 for 1 hour).
-                # This ensures we get the *latest* 'limit' minutes.
                 '$limit': limit
             },
             {
-                # 5. Project to reshape the document and format the timestamp.
-                # Projecting after limiting can be slightly more efficient.
                 '$project': {
-                    '_id': 0, # Exclude the _id field
+                    '_id': 0,
                     'temperature': '$temperature',
                     'humidity': '$humidity',
-                    'timestamp': '$timestamp_raw', # Use the raw timestamp for internal sorting in Python/JS
+                    'timestamp': '$timestamp_raw',
                     'timestamp_formatted': {
                         '$dateToString': {
                             'format': '%d-%m-%Y %H:%M:%S',
@@ -118,30 +98,19 @@ def get_aggregated_readings_from_db(limit: int = HISTORY_LENGTH_MINUTES) -> List
                 }
             },
             {
-                # 6. Sort by timestamp in ASCENDING order again for Chart.js and consistent frontend use.
                 '$sort': {
                     'timestamp': 1
                 }
             }
         ]
-
-        # Execute the aggregation pipeline
         aggregated_readings = list(readings_collection.aggregate(pipeline))
         return aggregated_readings
     except Exception as e:
         print(f"Error during MongoDB aggregation: {e}")
         return []
 
-
-# --- Flask Routes ---
-
 @app.route('/')
 def index():
-    """
-    Serves the main HTML page and passes initial live readings data
-    and initial statistics data (aggregated for charts, then reversed for table).
-    Also passes the local IP address for the socket server connection info.
-    """
     latest_reading = None
     if readings_collection is not None:
         try:
@@ -154,15 +123,10 @@ def index():
             print(f"Error fetching latest reading for initial render: {e}")
             latest_reading = None
 
-    # Get aggregated data (OLDEST FIRST from get_aggregated_readings_from_db for charts)
     raw_aggregated_data = get_aggregated_readings_from_db(limit=HISTORY_LENGTH_MINUTES)
-    
-    # Prepare data for table: reverse to show NEWEST FIRST
     initial_stats_data_for_table = list(reversed(raw_aggregated_data))
-
     local_server_ip = get_local_ip()
     socket_server_port = 5500
-
     return render_template(
         'index.html',
         initial_temperature=latest_reading.get('temperature') if latest_reading else None,
@@ -175,10 +139,6 @@ def index():
 
 @app.route('/api/live_readings', methods=['GET'])
 def get_live_readings():
-    """
-    Fetches the latest temperature and humidity readings from MongoDB via API.
-    This fetches the most recent (second-by-second) data.
-    """
     if readings_collection is None:
         return jsonify({"error": "Database not connected"}), 500
 
@@ -198,10 +158,6 @@ def get_live_readings():
 
 @app.route('/api/statistics', methods=['GET'])
 def get_statistics():
-    """
-    Fetches historical statistics (latest 60 aggregated 1-minute readings) from MongoDB.
-    Returns data OLDEST FIRST, suitable for charts.
-    """
     aggregated_readings = get_aggregated_readings_from_db(limit=HISTORY_LENGTH_MINUTES)
 
     if not aggregated_readings and readings_collection is not None:
@@ -217,9 +173,8 @@ def get_statistics():
     return jsonify({
         "message": "Latest historical readings (1-minute samples).",
         "count": len(aggregated_readings),
-        "data": aggregated_readings # This data is OLDEST FIRST (for charts). JS will reverse for table.
+        "data": aggregated_readings
     }), 200
-
 
 if __name__ == '__main__':
     app.run(debug=True)
