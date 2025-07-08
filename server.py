@@ -87,17 +87,6 @@ def handle_client(conn: socket.socket, addr: tuple[str, int]) -> None:
                     temperature: Optional[float] = None
                     humidity: Optional[float] = None
 
-                    # attempt to save as json first
-                    if msg.startswith('{') and msg.endswith('}'):
-                        try:
-                            data = json.loads(msg)
-                            temperature = data.get('temperature')
-                            humidity = data.get('humidity')
-                            if not (isinstance(temperature, (int, float)) and isinstance(humidity, (int, float))):
-                                raise ValueError("JSON message missing valid 'temperature' or 'humidity' values.")
-                        except json.JSONDecodeError:
-                            pass
-
                     # parse as "temperature!humidity"
                     if temperature is None or humidity is None:
                         if '!' in msg:
